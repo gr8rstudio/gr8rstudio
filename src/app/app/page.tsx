@@ -26,6 +26,17 @@ export default async function AgentsPage() {
         <div>
           <h1 className="text-2xl font-semibold tracking-tight">Your agents</h1>
           <p className="mt-1 text-sm text-muted">Each one runs in its own {provider.label}.</p>
+          <div className="mt-3 flex flex-wrap gap-2">
+            {(["chatgpt", "claude"] as const).map((p) => {
+              const on = conns.some((c) => c.provider === p);
+              return (
+                <Link key={p} href="/app/connections" className={`badge ${on ? "border-ok/30 text-ok" : "hover:text-text"}`}>
+                  <span className={`size-1.5 rounded-full ${on ? "bg-ok" : "bg-[#55555f]"}`} />
+                  {p === "chatgpt" ? "ChatGPT" : "Claude"} {on ? "connected" : "not connected"}
+                </Link>
+              );
+            })}
+          </div>
         </div>
         <Link href="/app/agents/new" className="btn btn-primary"><Plus className="size-4" /> New agent</Link>
       </div>

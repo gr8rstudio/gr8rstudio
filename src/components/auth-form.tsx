@@ -7,13 +7,16 @@ import type { FormState } from "@/app/actions/auth";
 export function AuthForm({
   mode,
   action,
+  next,
 }: {
   mode: "login" | "signup";
+  next?: string;
   action: (state: FormState, form: FormData) => Promise<FormState>;
 }) {
   const [state, formAction, pending] = useActionState(action, undefined);
   return (
     <form action={formAction} className="card w-full max-w-sm space-y-4 p-6">
+      {next && <input type="hidden" name="next" value={next} />}
       <div>
         <h1 className="text-xl font-semibold">{mode === "login" ? "Welcome back" : "Create your account"}</h1>
         <p className="mt-1 text-sm text-muted">

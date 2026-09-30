@@ -10,6 +10,7 @@ import { bootstrapVm, writePersona } from "./bootstrap";
 import { getCredential, updateCredentialSecret } from "./connections";
 
 const LOCK_MS = 15 * 60 * 1000;
+const CANCEL_POLL_MS = Number(process.env.GR8R_CANCEL_POLL_MS ?? 2000);
 const STALE_SESSION = /no conversation found|session .*not found|thread .*not found|no rollout found/i;
 
 export class AgentBusyError extends Error {
@@ -23,7 +24,7 @@ async function acquireLock(agentId: string): Promise<boolean> {
   const now = new Date();
   const rows = await db
     .update(schema.agents)
-    .set({ busyUntil: new Date(now.getTime() + LOCK_MS) })
+    .set({ busyUntil: new Date(now.getTime() + LOCK_MS), cancelRequested: false })
     .where(
       and(
         eq(schema.agents.id, agentId),
@@ -76,6 +77,7 @@ export async function* runTurn({ agent: initial, text, channel }: TurnInput): As
   let sessionId = agent.engineSessionId;
   let vmStatus = agent.vmStatus;
   let personaDirty = agent.personaDirty;
+  let stopped = false;
 
   await db.insert(schema.messages).values({
     id: newId(),
@@ -133,6 +135,24 @@ export async function* runTurn({ agent: initial, text, channel }: TurnInput): As
         env: { ...engine.env(paths), ...prepared.env },
         cwd: paths.workspace,
       });
+      // Stop requests arrive via the DB so they work across serverless instances.
+      let onStop: () => void = () => {};
+      const stopSignal = new Promise<"stop">((r) => (onStop = () => r("stop")));
+      const cancelWatch = setInterval(async () => {
+        try {
+          const [row] = await db
+            .select({ c: schema.agents.cancelRequested })
+            .from(schema.agents)
+            .where(eq(schema.agents.id, agent.id));
+          if (row?.c && !stopped) {
+            stopped = true;
+            onStop();
+            await proc.kill();
+          }
+        } catch {
+          /* transient DB error: try again next tick */
+        }
+      }, CANCEL_POLL_MS);
       const parser = engine.createParser();
       const lines = lineSplitter();
       let stderr = "";
@@ -148,14 +168,25 @@ export async function* runTurn({ agent: initial, text, channel }: TurnInput): As
         }
       };
 
-      for await (const chunk of proc.logs()) {
+      // Don't let a killed process that keeps its pipes open (e.g. orphaned children) hang the turn.
+      const logs = proc.logs()[Symbol.asyncIterator]();
+      while (true) {
+        const next = await Promise.race([logs.next(), stopSignal]);
+        if (next === "stop") {
+          void logs.return?.();
+          break;
+        }
+        if (next.done) break;
+        const chunk = next.value;
         if (chunk.stream === "stderr") {
           stderr = (stderr + chunk.data).slice(-4000);
           continue;
         }
         for (const line of lines.push(chunk.data)) yield* handle(line);
       }
-      for (const line of lines.flush()) yield* handle(line);
+      if (!stopped) for (const line of lines.flush()) yield* handle(line);
+      clearInterval(cancelWatch);
+      if (stopped) break;
       const { exitCode } = await proc.wait();
 
       if (!attemptError && !done && exitCode !== 0) {
@@ -191,7 +222,8 @@ export async function* runTurn({ agent: initial, text, channel }: TurnInput): As
   } catch (e) {
     error = (e as Error).message;
   } finally {
-    const content = partsToText(parts) || (error ? "" : "(no reply)");
+    if (stopped) error = null;
+    const content = partsToText(parts) || (error || stopped ? "" : "(no reply)");
     const doneEv = done as Extract<AgentEvent, { type: "done" }> | null;
     await db.insert(schema.messages).values({
       id: newId(),
@@ -200,16 +232,17 @@ export async function* runTurn({ agent: initial, text, channel }: TurnInput): As
       content,
       parts: JSON.stringify(parts),
       channel,
-      meta: JSON.stringify({ error, costUsd: doneEv?.costUsd, usage: doneEv?.usage }),
+      meta: JSON.stringify({ error, stopped, costUsd: doneEv?.costUsd, usage: doneEv?.usage }),
       createdAt: new Date(),
     });
     await db
       .update(schema.agents)
-      .set({ busyUntil: null, lastActiveAt: new Date(), engineSessionId: sessionId })
+      .set({ busyUntil: null, cancelRequested: false, lastActiveAt: new Date(), engineSessionId: sessionId })
       .where(eq(schema.agents.id, agent.id));
   }
 
-  if (error) yield { type: "error", message: error };
+  if (stopped) yield { type: "done", stopped: true };
+  else if (error) yield { type: "error", message: error };
   else yield done ?? { type: "done" };
 }
 

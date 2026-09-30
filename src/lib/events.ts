@@ -7,7 +7,7 @@ export type AgentEvent =
   | { type: "text"; delta: string }
   | { type: "tool"; id: string; name: string; input: string }
   | { type: "tool_result"; id: string; output: string; isError?: boolean }
-  | { type: "done"; costUsd?: number; usage?: Record<string, number> }
+  | { type: "done"; costUsd?: number; usage?: Record<string, number>; stopped?: boolean }
   | { type: "error"; message: string };
 
 export type MessagePart =

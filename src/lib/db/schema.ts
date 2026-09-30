@@ -46,6 +46,7 @@ export const agents = sqliteTable(
     personaDirty: integer("persona_dirty", { mode: "boolean" }).notNull().default(true),
     engineSessionId: text("engine_session_id"),
     busyUntil: integer("busy_until", { mode: "timestamp_ms" }),
+    cancelRequested: integer("cancel_requested", { mode: "boolean" }).notNull().default(false),
     telegramToken: text("telegram_token"), // sealed
     telegramSecret: text("telegram_secret"),
     telegramUsername: text("telegram_username"),

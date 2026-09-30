@@ -5,7 +5,9 @@ import { useRouter } from "next/navigation";
 import { useActionState, useEffect, useRef, useState, useTransition } from "react";
 import {
   ArrowUp,
+  Check,
   ChevronRight,
+  Copy,
   FileText,
   Loader2,
   Power,
@@ -13,6 +15,7 @@ import {
   RotateCcw,
   Send,
   Settings,
+  Square,
   Terminal,
   Trash2,
   X,
@@ -26,7 +29,7 @@ import {
   type VmAction,
 } from "@/app/actions/agents";
 import type { EngineId, MessageRole, VmStatus } from "@/lib/db/schema";
-import { applyEvent, type AgentEvent, type MessagePart } from "@/lib/events";
+import { applyEvent, partsToText, type AgentEvent, type MessagePart } from "@/lib/events";
 import { AgentForm } from "./agent-form";
 import { Markdown } from "./markdown";
 import { ENGINE_LABEL, VmBadge } from "./vm-badge";
@@ -36,7 +39,7 @@ export type ChatMessage = {
   role: MessageRole;
   content: string;
   parts: MessagePart[] | null;
-  meta: { error?: string | null; costUsd?: number; usage?: Record<string, number> } | null;
+  meta: { error?: string | null; stopped?: boolean; costUsd?: number; usage?: Record<string, number> } | null;
   channel: string;
 };
 
@@ -56,6 +59,12 @@ type AgentView = {
 
 type Tab = "vm" | "files" | "settings" | "telegram";
 
+const SUGGESTIONS = [
+  "Introduce yourself. What can you do in your VM?",
+  "Start a memory file with my name and what I'm working on",
+  "Write a small Python script that prints today's date, then run it",
+];
+
 export function AgentWorkspace({
   agent,
   provider,
@@ -73,6 +82,9 @@ export function AgentWorkspace({
   const [input, setInput] = useState("");
   const [tab, setTab] = useState<Tab>("vm");
   const [panelOpen, setPanelOpen] = useState(false);
+  const [liveVm, setLiveVm] = useState<VmStatus | null>(null);
+  const [stopping, setStopping] = useState(false);
+  const vmStatus = live && liveVm ? liveVm : agent.vmStatus;
   const scroller = useRef<HTMLDivElement>(null);
   const hasConnection = agent.engine === "claude" ? connected.claude : connected.codex;
 
@@ -80,10 +92,17 @@ export function AgentWorkspace({
     scroller.current?.scrollTo({ top: scroller.current.scrollHeight, behavior: "smooth" });
   }, [messages, live]);
 
-  async function send() {
-    const text = input.trim();
+  async function stop() {
+    setStopping(true);
+    setLive((l) => (l ? { ...l, status: "Stopping…" } : l));
+    await fetch(`/api/agents/${agent.id}/stop`, { method: "POST" }).catch(() => {});
+  }
+
+  async function send(override?: string) {
+    const text = (override ?? input).trim();
     if (!text || live) return;
     setInput("");
+    setStopping(false);
     setMessages((m) => [...m, { id: `u-${Date.now()}`, role: "user", content: text, parts: null, meta: null, channel: "web" }]);
     setLive({ parts: [], status: "Sending…" });
 
@@ -111,13 +130,20 @@ export function AgentWorkspace({
         for (const frame of frames) {
           if (!frame.startsWith("data: ")) continue;
           const ev = JSON.parse(frame.slice(6)) as AgentEvent;
-          if (ev.type === "status") setLive((l) => (l ? { ...l, status: ev.message } : l));
+          if (ev.type === "status") {
+            if (/Booting|Installing/.test(ev.message)) setLiveVm("booting");
+            setLive((l) => (l && l.status !== "Stopping…" ? { ...l, status: ev.message } : l));
+          }
           else if (ev.type === "error") error = ev.message;
           else if (ev.type === "done") done = ev;
           else {
+            setLiveVm("ready");
             parts = applyEvent(parts, ev);
             const snapshot = parts;
-            setLive((l) => ({ status: l?.status === "Thinking…" || !l ? "Working…" : l.status, parts: snapshot }));
+            setLive((l) => ({
+              status: !l || /Thinking|Waking|Booting|Installing/.test(l.status) ? "Working…" : l.status,
+              parts: snapshot,
+            }));
           }
         }
       }
@@ -132,11 +158,12 @@ export function AgentWorkspace({
         role: "assistant",
         content: "",
         parts,
-        meta: { error, costUsd: finalDone?.costUsd, usage: finalDone?.usage },
+        meta: { error, stopped: finalDone?.stopped, costUsd: finalDone?.costUsd, usage: finalDone?.usage },
         channel: "web",
       },
     ]);
     setLive(null);
+    setLiveVm(null);
     router.refresh(); // VM status, last active
   }
 
@@ -154,7 +181,7 @@ export function AgentWorkspace({
             </p>
           </div>
           <div className="ml-auto flex items-center gap-2">
-            <VmBadge status={agent.vmStatus} />
+            <VmBadge status={vmStatus} />
             <button className="btn btn-ghost lg:hidden" onClick={() => setPanelOpen(true)} aria-label="Agent settings">
               <Settings className="size-4" />
             </button>
@@ -169,10 +196,22 @@ export function AgentWorkspace({
               <p className="mt-1 text-sm text-muted">
                 The first message boots {agent.name}&apos;s VM and installs its tools. That takes about a minute, once.
               </p>
-              {!hasConnection && (
+              {!hasConnection ? (
                 <Link href="/app/connections" className="btn btn-primary mt-5">
                   Connect {agent.engine === "claude" ? "Claude" : "ChatGPT"} first
                 </Link>
+              ) : (
+                <div className="mt-6 grid gap-2">
+                  {SUGGESTIONS.map((q) => (
+                    <button
+                      key={q}
+                      onClick={() => send(q)}
+                      className="rounded-xl border border-line bg-panel px-4 py-2.5 text-left text-sm text-muted transition hover:border-accent/50 hover:text-text"
+                    >
+                      {q}
+                    </button>
+                  ))}
+                </div>
               )}
             </div>
           )}
@@ -210,9 +249,22 @@ export function AgentWorkspace({
               placeholder={live ? `${agent.name} is working…` : `Message ${agent.name}`}
               className="max-h-48 min-h-9 flex-1 resize-none bg-transparent px-2 py-1.5 text-sm outline-none field-sizing-content placeholder:text-[#5c5c66]"
             />
-            <button className="btn btn-primary size-9 p-0" disabled={!input.trim() || Boolean(live)} aria-label="Send">
-              {live ? <Loader2 className="size-4 animate-spin" /> : <ArrowUp className="size-4" />}
-            </button>
+            {live ? (
+              <button
+                type="button"
+                onClick={stop}
+                disabled={stopping}
+                className="btn size-9 p-0"
+                aria-label="Stop"
+                title="Stop"
+              >
+                {stopping ? <Loader2 className="size-4 animate-spin" /> : <Square className="size-3.5 fill-current" />}
+              </button>
+            ) : (
+              <button className="btn btn-primary size-9 p-0" disabled={!input.trim()} aria-label="Send">
+                <ArrowUp className="size-4" />
+              </button>
+            )}
           </div>
         </form>
       </section>
@@ -245,7 +297,7 @@ export function AgentWorkspace({
           </button>
         </div>
         <div className="flex-1 overflow-y-auto p-4 lg:max-h-[calc(100dvh-10rem)] lg:rounded-b-2xl lg:border lg:border-t-0 lg:border-line lg:bg-panel">
-          {tab === "vm" && <VmPanel agent={agent} provider={provider} busy={Boolean(live)} />}
+          {tab === "vm" && <VmPanel agent={{ ...agent, vmStatus }} provider={provider} busy={Boolean(live)} />}
           {tab === "files" && <FilesPanel agentId={agent.id} vmStatus={agent.vmStatus} />}
           {tab === "settings" && <SettingsPanel agent={agent} connected={connected} />}
           {tab === "telegram" && <TelegramPanel agent={agent} />}
@@ -276,21 +328,44 @@ function MessageView({ m }: { m: ChatMessage }) {
     );
   }
   const parts = m.parts ?? (m.content ? [{ kind: "text" as const, text: m.content }] : []);
+  const text = partsToText(parts);
+  const needsConnection = m.meta?.error?.includes("Connections page");
   return (
-    <div className="space-y-3">
+    <div className="group/msg space-y-3">
       <Parts parts={parts} />
       {m.meta?.error && (
-        <div className="whitespace-pre-wrap rounded-lg border border-[#4a2020] bg-[#1f1010] px-3 py-2 font-mono text-xs text-danger">
-          {m.meta.error}
+        <div className="flex flex-wrap items-center gap-3 rounded-lg border border-[#4a2020] bg-[#1f1010] px-3 py-2 text-xs text-danger">
+          <span className="min-w-0 flex-1 whitespace-pre-wrap font-mono">{m.meta.error}</span>
+          {needsConnection && (
+            <Link href="/app/connections" className="btn btn-primary py-1 text-xs">Connect</Link>
+          )}
         </div>
       )}
-      {(m.meta?.usage || m.channel === "telegram") && (
-        <p className="text-[11px] text-[#5c5c66]">
-          {m.channel === "telegram" ? "via Telegram · " : ""}
-          {m.meta?.usage ? `${m.meta.usage.input_tokens ?? 0} in / ${m.meta.usage.output_tokens ?? 0} out tokens` : ""}
-        </p>
-      )}
+      <div className="flex items-center gap-3 text-[11px] text-[#5c5c66]">
+        {m.meta?.stopped && <span className="text-warn">Stopped</span>}
+        {m.channel === "telegram" && <span>via Telegram</span>}
+        {m.meta?.usage && (
+          <span>{`${m.meta.usage.input_tokens ?? 0} in / ${m.meta.usage.output_tokens ?? 0} out tokens`}</span>
+        )}
+        {text && <CopyButton text={text} />}
+      </div>
     </div>
+  );
+}
+
+function CopyButton({ text }: { text: string }) {
+  const [copied, setCopied] = useState(false);
+  return (
+    <button
+      className="flex items-center gap-1 opacity-0 transition hover:text-text group-hover/msg:opacity-100 focus:opacity-100"
+      onClick={() => {
+        navigator.clipboard.writeText(text);
+        setCopied(true);
+        setTimeout(() => setCopied(false), 1500);
+      }}
+    >
+      {copied ? <Check className="size-3" /> : <Copy className="size-3" />} {copied ? "Copied" : "Copy"}
+    </button>
   );
 }
 

@@ -6,6 +6,7 @@ import type { ExecOptions, VmHandle, VmProvider } from "@/lib/vm/types";
 
 const dir = mkdtempSync(path.join(tmpdir(), "gr8r-test-"));
 process.env.DATABASE_URL = `file:${dir}/test.db`;
+process.env.GR8R_CANCEL_POLL_MS = "50";
 
 const claudeLines = readFileSync(path.join(__dirname, "fixtures", "claude-stream.jsonl"), "utf8");
 
@@ -13,6 +14,7 @@ const claudeLines = readFileSync(path.join(__dirname, "fixtures", "claude-stream
 const calls: ExecOptions[] = [];
 const files = new Map<string, string>();
 let failResumeOnce = false;
+let hangUntilKilled = false;
 
 const fakeVm: VmHandle = {
   name: "fake",
@@ -32,12 +34,21 @@ const fakeVm: VmHandle = {
     }
     // Deliver stdout in awkward chunks to exercise line buffering.
     const chunks = out.match(/[\s\S]{1,37}/g) ?? [];
+    let killed: () => void = () => {};
+    const killedP = new Promise<void>((r) => (killed = r));
+    const hang = isClaude && hangUntilKilled;
     return {
       async *logs() {
+        if (hang) {
+          yield { stream: "stdout" as const, data: out.split("\n").slice(0, 6).join("\n") + "\n" };
+          await killedP;
+          return;
+        }
         for (const c of chunks) yield { stream: "stdout" as const, data: c };
         if (err) yield { stream: "stderr" as const, data: err };
       },
-      wait: async () => ({ exitCode: code }),
+      wait: async () => (hang ? killedP.then(() => ({ exitCode: 143 })) : { exitCode: code }),
+      kill: async () => killed(),
     };
   },
   async spawnBackground() {},
@@ -132,6 +143,24 @@ describe("runTurn", () => {
     expect(calls).toHaveLength(2);
     expect(calls[1].args).not.toContain("--resume");
     expect(events.at(-1)?.type).toBe("done");
+  });
+
+  it("stops a running turn when the owner presses Stop", async () => {
+    const { eq } = await import("drizzle-orm");
+    hangUntilKilled = true;
+    const events: import("@/lib/events").AgentEvent[] = [];
+    const run = (async () => {
+      for await (const ev of mod.runTurn({ agent: await agent(), text: "long task", channel: "web" })) events.push(ev);
+    })();
+    await new Promise((r) => setTimeout(r, 100));
+    await db.update(schema.agents).set({ cancelRequested: true }).where(eq(schema.agents.id, "a1"));
+    await run;
+    hangUntilKilled = false;
+    expect(events.at(-1)).toEqual({ type: "done", stopped: true });
+    expect(events.some((e) => e.type === "text")).toBe(true); // partial reply kept
+    const a = await agent();
+    expect(a.busyUntil).toBeNull();
+    expect(a.cancelRequested).toBe(false);
   });
 
   it("refuses concurrent turns", async () => {

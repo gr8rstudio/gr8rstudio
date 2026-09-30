@@ -25,6 +25,7 @@ class LocalVm implements VmHandle {
       env: this.baseEnv(opts.env),
       stdio: ["ignore", "pipe", "pipe"],
       signal: opts.signal,
+      detached: true, // own process group, so kill() takes the agent's children with it
     });
     const queue: (LogChunk | null)[] = [];
     let notify: (() => void) | null = null;
@@ -60,6 +61,13 @@ class LocalVm implements VmHandle {
         }
       },
       wait: () => exit,
+      async kill() {
+        try {
+          if (child.pid) process.kill(-child.pid, "SIGTERM");
+        } catch {
+          child.kill("SIGTERM");
+        }
+      },
     };
   }
 

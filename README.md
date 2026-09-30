@@ -5,7 +5,7 @@ Personal AI agents that run on the **ChatGPT and Claude subscriptions you alread
 - **Sign in with ChatGPT.** We run the official `codex login --device-auth` in a throwaway VM and show you the one-time code. Your `auth.json` is encrypted into the vault.
 - **Claude subscription.** Paste a `claude setup-token` token (or an API key).
 - **One microVM per agent** (Vercel Sandbox, `persistent: true`). Each VM has a persistent disk, shell, internet, the official **Claude Code** / **Codex** agents, a persona file and a `memory/` folder. It sleeps when idle and resumes on the next message.
-- **Chat** on the web with live streaming and a tool trace, or through a **per-agent Telegram bot** paired privately to you.
+- **Chat** on the web with live streaming, a tool trace and a **Stop** button, or through a **per-agent Telegram bot** paired privately to you.
 
 See [PLAN.md](./PLAN.md) for the architecture, data model and roadmap.
 
@@ -23,9 +23,19 @@ Sign up, then go to **Connections** and connect Claude and/or ChatGPT. Create an
 
 ## Deploy (Vercel)
 
-1. Import the repo into Vercel. Sandbox auth uses OIDC automatically.
-2. Create a Turso database. Set `DATABASE_URL`, `DATABASE_AUTH_TOKEN` and `APP_SECRET`. `VM_PROVIDER` defaults to `vercel` on Vercel.
-3. Tables are created automatically on first request.
+1. **Database.** Create a free [Turso](https://turso.tech) database, then copy its URL (`libsql://…`) and an auth token.
+2. **Import the repo** into Vercel (framework: Next.js, no build settings needed).
+3. **Environment variables** (Project → Settings → Environment Variables):
+   | Name | Value |
+   | --- | --- |
+   | `APP_SECRET` | output of `openssl rand -hex 32` (**never change it later**: it encrypts stored credentials) |
+   | `DATABASE_URL` | `libsql://<your-db>.turso.io` |
+   | `DATABASE_AUTH_TOKEN` | Turso token |
+4. **Deploy.** Sandbox auth uses Vercel OIDC automatically. `VM_PROVIDER` defaults to `vercel`, and tables are created on the first request.
+5. **Verify.** `https://<your-app>/api/health` should return `{"ok":true,"db":"ok","vmProvider":"vercel","isolated":true}`.
+6. **Try it.** Sign up → Connections → create an agent → say hi. The first message boots its microVM (about a minute).
+
+Optional: for Telegram bots, set `APP_URL` to your custom domain if it differs from the Vercel production URL.
 
 ## How a turn works
 
@@ -53,7 +63,7 @@ src/lib/vm/            VM provider interface · vercel.ts (microVMs) · local.ts
 src/lib/engines/       claude.ts / codex.ts: command, env, credentials, stream parser
 src/lib/runtime/       turn.ts (turn runner) · bootstrap.ts · chatgpt-login.ts · connections.ts
 src/lib/vault.ts       AES-256-GCM credential sealing
-src/app/api/           chat SSE · files · ChatGPT login · Telegram webhook
+src/app/api/           chat SSE · stop · files · ChatGPT login · Telegram webhook · health
 src/app/app/           dashboard · connections · agent workspace
 ```
 

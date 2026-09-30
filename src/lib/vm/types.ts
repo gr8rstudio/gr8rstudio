@@ -14,6 +14,7 @@ export interface LogChunk {
 export interface ExecProcess {
   logs(): AsyncIterable<LogChunk>;
   wait(): Promise<{ exitCode: number }>;
+  kill(): Promise<void>;
 }
 
 /** A running (or resumable) VM that belongs to exactly one agent or login flow. */

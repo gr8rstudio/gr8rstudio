@@ -44,7 +44,8 @@ export async function login(_: FormState, form: FormData): Promise<FormState> {
     return { error: "Invalid email or password" };
   }
   await startSession(user.id);
-  redirect("/app");
+  const next = String(form.get("next") ?? "");
+  redirect(/^\/app(\/[\w\-/]*)?$/.test(next) ? next : "/app");
 }
 
 export async function logout() {

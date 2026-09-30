@@ -18,7 +18,7 @@ const DDL = [
     id TEXT PRIMARY KEY, user_id TEXT NOT NULL, name TEXT NOT NULL, emoji TEXT NOT NULL DEFAULT '🤖',
     persona TEXT NOT NULL DEFAULT '', engine TEXT NOT NULL, model TEXT,
     vm_provider TEXT NOT NULL, vm_name TEXT NOT NULL, vm_status TEXT NOT NULL DEFAULT 'none', vm_error TEXT,
-    persona_dirty INTEGER NOT NULL DEFAULT 1, engine_session_id TEXT, busy_until INTEGER,
+    persona_dirty INTEGER NOT NULL DEFAULT 1, engine_session_id TEXT, busy_until INTEGER, cancel_requested INTEGER NOT NULL DEFAULT 0,
     telegram_token TEXT, telegram_secret TEXT, telegram_username TEXT, telegram_pair_code TEXT,
     telegram_chat_id TEXT, created_at INTEGER NOT NULL, last_active_at INTEGER)`,
   `CREATE INDEX IF NOT EXISTS agents_user_idx ON agents(user_id)`,
@@ -30,6 +30,9 @@ const DDL = [
     id TEXT PRIMARY KEY, user_id TEXT NOT NULL, provider TEXT NOT NULL, vm_name TEXT NOT NULL,
     status TEXT NOT NULL, url TEXT, code TEXT, error TEXT, created_at INTEGER NOT NULL)`,
 ];
+
+// Additive migrations for databases created by earlier versions. Each runs once; "duplicate column" is fine.
+const MIGRATIONS = [`ALTER TABLE agents ADD COLUMN cancel_requested INTEGER NOT NULL DEFAULT 0`];
 
 type Db = LibSQLDatabase<typeof schema>;
 
@@ -43,6 +46,11 @@ async function init(): Promise<Db> {
   }
   const client: Client = createClient({ url, authToken: env.databaseAuthToken });
   await client.batch(DDL, "write");
+  for (const sql of MIGRATIONS) {
+    await client.execute(sql).catch((e: Error) => {
+      if (!/duplicate column/i.test(e.message)) throw e;
+    });
+  }
   return drizzle(client, { schema });
 }
 

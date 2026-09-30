@@ -48,6 +48,9 @@ class VercelVm implements VmHandle {
         const done = await cmd.wait({ signal: opts.signal });
         return { exitCode: done.exitCode ?? 1 };
       },
+      async kill() {
+        await cmd.kill("SIGTERM").catch(() => {});
+      },
     };
   }
 
