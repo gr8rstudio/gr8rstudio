@@ -1,0 +1,73 @@
+@import "tailwindcss";
+@plugin "@tailwindcss/typography";
+
+:root {
+  --bg: #0b0b0d;
+  --panel: #131316;
+  --panel-2: #1a1a1f;
+  --line: #26262d;
+  --text: #ededf0;
+  --muted: #8b8b96;
+  --accent: #c6f432;
+  --accent-ink: #0b0b0d;
+  --danger: #ff6b6b;
+  --ok: #4ade80;
+  --warn: #fbbf24;
+}
+
+@theme inline {
+  --color-bg: var(--bg);
+  --color-panel: var(--panel);
+  --color-panel-2: var(--panel-2);
+  --color-line: var(--line);
+  --color-text: var(--text);
+  --color-muted: var(--muted);
+  --color-accent: var(--accent);
+  --color-accent-ink: var(--accent-ink);
+  --color-danger: var(--danger);
+  --color-ok: var(--ok);
+  --color-warn: var(--warn);
+  --font-sans: var(--font-geist-sans);
+  --font-mono: var(--font-geist-mono);
+}
+
+html {
+  color-scheme: dark;
+}
+
+body {
+  background: var(--bg);
+  color: var(--text);
+}
+
+@layer components {
+  .btn {
+    @apply inline-flex items-center justify-center gap-2 whitespace-nowrap rounded-lg px-3.5 py-2 text-sm font-medium transition
+      disabled:cursor-not-allowed disabled:opacity-50 border border-line bg-panel-2 hover:bg-[#222228];
+  }
+  .btn-primary {
+    @apply border-transparent bg-accent text-accent-ink hover:bg-[#d4ff4a];
+  }
+  .btn-ghost {
+    @apply border-transparent bg-transparent text-muted hover:bg-panel-2 hover:text-text;
+  }
+  .btn-danger {
+    @apply border-[#4a2020] bg-[#2a1414] text-danger hover:bg-[#3a1818];
+  }
+  .card {
+    @apply rounded-2xl border border-line bg-panel;
+  }
+  .input {
+    @apply w-full rounded-lg border border-line bg-bg px-3 py-2 text-sm text-text outline-none transition
+      placeholder:text-[#5c5c66] focus:border-accent/60 focus:ring-2 focus:ring-accent/15;
+  }
+  .label {
+    @apply mb-1.5 block text-xs font-medium uppercase tracking-wide text-muted;
+  }
+  .badge {
+    @apply inline-flex items-center gap-1.5 whitespace-nowrap rounded-full border border-line bg-panel-2 px-2 py-0.5 text-xs text-muted;
+  }
+  .kbd {
+    @apply rounded border border-line bg-panel-2 px-1.5 py-0.5 font-mono text-[12px] text-text;
+  }
+}
